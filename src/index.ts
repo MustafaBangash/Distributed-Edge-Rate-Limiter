@@ -1,12 +1,39 @@
 import { DurableObject } from "cloudflare:workers";
 
-/**
- * The generated Durable Object remains registered while we build the HTTP
- * request flow. We will turn this into the rate-limit bucket in a later step.
- */
-export class MyDurableObject extends DurableObject<Env> {
-	async sayHello(name: string): Promise<string> {
-		return `Hello, ${name}!`;
+import {
+	consumeToken,
+	createTokenBucket,
+	type TokenBucketPolicy,
+	type TokenBucketState,
+} from "./rate-limiter/token-bucket";
+
+export interface RateLimitResult {
+	allowed: boolean;
+	limit: number;
+	remaining: number;
+	retryAfterSeconds: number;
+}
+
+export class RateLimitBucket extends DurableObject<Env> {
+	checkLimit(policy: TokenBucketPolicy): RateLimitResult {
+		const nowMs = Date.now();
+		const storedState = this.ctx.storage.kv.get<TokenBucketState>("bucket");
+		const state = storedState
+			? {
+					tokens: Math.min(storedState.tokens, policy.capacity),
+					lastRefillAtMs: storedState.lastRefillAtMs,
+				}
+			: createTokenBucket(policy, nowMs);
+		const decision = consumeToken(policy, state, nowMs);
+
+		this.ctx.storage.kv.put("bucket", decision.state);
+
+		return {
+			allowed: decision.allowed,
+			limit: policy.capacity,
+			remaining: Math.floor(decision.remainingTokens),
+			retryAfterSeconds: decision.retryAfterSeconds,
+		};
 	}
 }
 
