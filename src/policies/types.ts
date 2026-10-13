@@ -1,3 +1,4 @@
+import type { SlidingWindowPolicy } from "../rate-limiter/sliding-window.ts";
 import type { TokenBucketPolicy } from "../rate-limiter/token-bucket.ts";
 
 export type HttpMethod =
@@ -23,11 +24,10 @@ export type TokenBucketRateLimitPolicy = PolicyTarget &
 		algorithm: "token-bucket";
 	};
 
-export type SlidingWindowRateLimitPolicy = PolicyTarget & {
-	algorithm: "sliding-window";
-	limit: number;
-	windowSeconds: number;
-};
+export type SlidingWindowRateLimitPolicy = PolicyTarget &
+	SlidingWindowPolicy & {
+		algorithm: "sliding-window";
+	};
 
 export type RateLimitPolicy =
 	| TokenBucketRateLimitPolicy
