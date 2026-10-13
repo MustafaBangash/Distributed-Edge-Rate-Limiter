@@ -1,11 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 
+import { matchPolicy } from "./policies/match-policy.ts";
+import type { RateLimitIdentity } from "./policies/types.ts";
 import {
 	consumeToken,
 	createTokenBucket,
 	type TokenBucketPolicy,
 	type TokenBucketState,
-} from "./rate-limiter/token-bucket";
+} from "./rate-limiter/token-bucket.ts";
 
 export interface RateLimitResult {
 	allowed: boolean;
@@ -13,12 +15,6 @@ export interface RateLimitResult {
 	remaining: number;
 	retryAfterSeconds: number;
 }
-
-const DEFAULT_POLICY: TokenBucketPolicy = {
-	capacity: 5,
-	refillRatePerSecond: 1,
-};
-
 export class RateLimitBucket extends DurableObject<Env> {
 	checkLimit(policy: TokenBucketPolicy): RateLimitResult {
 		const nowMs = Date.now();
@@ -46,18 +42,31 @@ function jsonResponse(body: unknown, status = 200): Response {
 	return Response.json(body, { status });
 }
 
-async function getBucketName(request: Request): Promise<string> {
-	const clientIdentity =
-		request.headers.get("x-api-key") ??
-		request.headers.get("cf-connecting-ip") ??
-		"anonymous";
+function getClientIdentity(
+	request: Request,
+	identityType: RateLimitIdentity,
+): string | null {
+	switch (identityType) {
+		case "api-key":
+			return request.headers.get("x-api-key");
+		case "ip":
+			return request.headers.get("cf-connecting-ip");
+		case "user":
+			return null;
+	}
+}
+
+async function getBucketName(
+	policyId: string,
+	clientIdentity: string,
+): Promise<string> {
 	const identityBytes = new TextEncoder().encode(clientIdentity);
 	const digest = await crypto.subtle.digest("SHA-256", identityBytes);
 	const identityHash = Array.from(new Uint8Array(digest), (byte) =>
 		byte.toString(16).padStart(2, "0"),
 	).join("");
 
-	return `default:${identityHash}`;
+	return `${policyId}:${identityHash}`;
 }
 
 function rateLimitHeaders(result: RateLimitResult): HeadersInit {
@@ -78,10 +87,25 @@ export default {
 			});
 		}
 
-		if (request.method === "GET" && url.pathname === "/api/protected") {
-			const bucketName = await getBucketName(request);
+		const policy = matchPolicy(request.method, url.pathname);
+
+		if (policy) {
+			const clientIdentity = getClientIdentity(request, policy.identity);
+
+			if (!clientIdentity) {
+				return jsonResponse({ error: "Client identity is required" }, 401);
+			}
+
+			if (policy.algorithm !== "token-bucket") {
+				return jsonResponse(
+					{ error: "Rate-limit algorithm is not implemented" },
+					501,
+				);
+			}
+
+			const bucketName = await getBucketName(policy.id, clientIdentity);
 			const bucket = env.RATE_LIMITER.getByName(bucketName);
-			const result = await bucket.checkLimit(DEFAULT_POLICY);
+			const result = await bucket.checkLimit(policy);
 			const headers = new Headers(rateLimitHeaders(result));
 
 			if (!result.allowed) {

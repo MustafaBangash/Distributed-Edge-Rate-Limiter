@@ -38,19 +38,23 @@ describe("rate-limit Worker", () => {
 		assert.deepEqual(await response.json(), { error: "Not found" });
 	});
 
+	it("requires the identity configured by the matching policy", async () => {
+		const response = await server.fetch("/api/protected");
+
+		assert.equal(response.status, 401);
+		assert.deepEqual(await response.json(), {
+			error: "Client identity is required",
+		});
+	});
+
 	it("rejects requests after a client exhausts its bucket", async () => {
 		const headers = { "x-api-key": "exhausted-client" };
 
-		for (let requestNumber = 1; requestNumber <= 5; requestNumber += 1) {
-			const response = await server.fetch("/api/protected", { headers });
+		const allowedResponse = await server.fetch("/api/protected", { headers });
 
-			assert.equal(response.status, 200);
-			assert.equal(response.headers.get("x-ratelimit-limit"), "5");
-			assert.equal(
-				response.headers.get("x-ratelimit-remaining"),
-				(5 - requestNumber).toString(),
-			);
-		}
+		assert.equal(allowedResponse.status, 200);
+		assert.equal(allowedResponse.headers.get("x-ratelimit-limit"), "1");
+		assert.equal(allowedResponse.headers.get("x-ratelimit-remaining"), "0");
 
 		const rejectedResponse = await server.fetch("/api/protected", {
 			headers,
@@ -58,22 +62,19 @@ describe("rate-limit Worker", () => {
 
 		assert.equal(rejectedResponse.status, 429);
 		assert.equal(rejectedResponse.headers.get("x-ratelimit-remaining"), "0");
-		assert.equal(rejectedResponse.headers.get("retry-after"), "1");
+		assert.equal(rejectedResponse.headers.get("retry-after"), "2");
 		assert.deepEqual(await rejectedResponse.json(), {
 			error: "Rate limit exceeded",
-			retryAfterSeconds: 1,
+			retryAfterSeconds: 2,
 		});
 	});
 
 	it("maintains independent buckets for different clients", async () => {
 		const firstClientHeaders = { "x-api-key": "first-client" };
 
-		for (let requestNumber = 0; requestNumber < 5; requestNumber += 1) {
-			const response = await server.fetch("/api/protected", {
-				headers: firstClientHeaders,
-			});
-			assert.equal(response.status, 200);
-		}
+		const firstClientAllowed = await server.fetch("/api/protected", {
+			headers: firstClientHeaders,
+		});
 
 		const firstClientRejected = await server.fetch("/api/protected", {
 			headers: firstClientHeaders,
@@ -82,8 +83,9 @@ describe("rate-limit Worker", () => {
 			headers: { "x-api-key": "second-client" },
 		});
 
+		assert.equal(firstClientAllowed.status, 200);
 		assert.equal(firstClientRejected.status, 429);
 		assert.equal(secondClientAllowed.status, 200);
-		assert.equal(secondClientAllowed.headers.get("x-ratelimit-remaining"), "4");
+		assert.equal(secondClientAllowed.headers.get("x-ratelimit-remaining"), "0");
 	});
 });
