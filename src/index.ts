@@ -1,11 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { matchPolicy } from "./policies/match-policy.ts";
-import type { RateLimitIdentity } from "./policies/types.ts";
+import type { RateLimitIdentity, RateLimitPolicy } from "./policies/types.ts";
+import {
+	createSlidingWindow,
+	evaluateSlidingWindow,
+	type SlidingWindowState,
+} from "./rate-limiter/sliding-window.ts";
 import {
 	consumeToken,
 	createTokenBucket,
-	type TokenBucketPolicy,
 	type TokenBucketState,
 } from "./rate-limiter/token-bucket.ts";
 
@@ -16,25 +20,47 @@ export interface RateLimitResult {
 	retryAfterSeconds: number;
 }
 export class RateLimitBucket extends DurableObject<Env> {
-	checkLimit(policy: TokenBucketPolicy): RateLimitResult {
+	checkLimit(policy: RateLimitPolicy): RateLimitResult {
 		const nowMs = Date.now();
-		const storedState = this.ctx.storage.kv.get<TokenBucketState>("bucket");
-		const state = storedState
-			? {
-					tokens: Math.min(storedState.tokens, policy.capacity),
-					lastRefillAtMs: storedState.lastRefillAtMs,
-				}
-			: createTokenBucket(policy, nowMs);
-		const decision = consumeToken(policy, state, nowMs);
 
-		this.ctx.storage.kv.put("bucket", decision.state);
+		switch (policy.algorithm) {
+			case "token-bucket": {
+				const storedState =
+					this.ctx.storage.kv.get<TokenBucketState>("token-bucket-state");
+				const state = storedState
+					? {
+							tokens: Math.min(storedState.tokens, policy.capacity),
+							lastRefillAtMs: storedState.lastRefillAtMs,
+						}
+					: createTokenBucket(policy, nowMs);
+				const decision = consumeToken(policy, state, nowMs);
 
-		return {
-			allowed: decision.allowed,
-			limit: policy.capacity,
-			remaining: Math.floor(decision.remainingTokens),
-			retryAfterSeconds: decision.retryAfterSeconds,
-		};
+				this.ctx.storage.kv.put("token-bucket-state", decision.state);
+
+				return {
+					allowed: decision.allowed,
+					limit: policy.capacity,
+					remaining: Math.floor(decision.remainingTokens),
+					retryAfterSeconds: decision.retryAfterSeconds,
+				};
+			}
+			case "sliding-window": {
+				const state =
+					this.ctx.storage.kv.get<SlidingWindowState>(
+						"sliding-window-state",
+					) ?? createSlidingWindow();
+				const decision = evaluateSlidingWindow(policy, state, nowMs);
+
+				this.ctx.storage.kv.put("sliding-window-state", decision.state);
+
+				return {
+					allowed: decision.allowed,
+					limit: policy.limit,
+					remaining: decision.remaining,
+					retryAfterSeconds: decision.retryAfterSeconds,
+				};
+			}
+		}
 	}
 }
 
@@ -94,13 +120,6 @@ export default {
 
 			if (!clientIdentity) {
 				return jsonResponse({ error: "Client identity is required" }, 401);
-			}
-
-			if (policy.algorithm !== "token-bucket") {
-				return jsonResponse(
-					{ error: "Rate-limit algorithm is not implemented" },
-					501,
-				);
 			}
 
 			const bucketName = await getBucketName(policy.id, clientIdentity);

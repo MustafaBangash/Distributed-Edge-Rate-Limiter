@@ -88,4 +88,28 @@ describe("rate-limit Worker", () => {
 		assert.equal(secondClientAllowed.status, 200);
 		assert.equal(secondClientAllowed.headers.get("x-ratelimit-remaining"), "0");
 	});
+
+	it("enforces a sliding-window policy", async () => {
+		const headers = { "x-api-key": "sliding-window-client" };
+
+		for (const expectedRemaining of ["2", "1", "0"]) {
+			const response = await server.fetch("/api/sliding-window", { headers });
+
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("x-ratelimit-limit"), "3");
+			assert.equal(
+				response.headers.get("x-ratelimit-remaining"),
+				expectedRemaining,
+			);
+		}
+
+		const rejectedResponse = await server.fetch("/api/sliding-window", {
+			headers,
+		});
+
+		assert.equal(rejectedResponse.status, 429);
+		assert.equal(rejectedResponse.headers.get("x-ratelimit-limit"), "3");
+		assert.equal(rejectedResponse.headers.get("x-ratelimit-remaining"), "0");
+		assert.equal(rejectedResponse.headers.get("retry-after"), "10");
+	});
 });

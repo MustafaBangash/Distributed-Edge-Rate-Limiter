@@ -10,4 +10,13 @@ export const rateLimitPolicies = [
 		capacity: 1,
 		refillRatePerSecond: 0.5,
 	},
+	{
+		id: "sliding-window-api",
+		method: "GET",
+		path: "/api/sliding-window",
+		identity: "api-key",
+		algorithm: "sliding-window",
+		limit: 3,
+		windowSeconds: 10,
+	},
 ] as const satisfies readonly RateLimitPolicy[];
