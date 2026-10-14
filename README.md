@@ -8,6 +8,31 @@ rate-limit state isolated.
 This project is under active development. The rate-limiting core and local demo
 routes work; forwarding approved requests to an external backend is planned.
 
+## Live demo
+
+The service is deployed at
+[api.mustafabangash.com](https://api.mustafabangash.com/health).
+
+Check its health:
+
+```bash
+curl -i https://api.mustafabangash.com/health
+```
+
+Exercise the deployed sliding-window policy, which permits three requests per
+10-second window:
+
+```bash
+for request in {1..4}; do
+  curl -i \
+    -H "x-api-key: live-demo" \
+    https://api.mustafabangash.com/api/sliding-window
+done
+```
+
+The first three requests return `200 OK`; the fourth returns `429 Too Many
+Requests`.
+
 ## What it demonstrates
 
 - Rate limiting at Cloudflare's edge

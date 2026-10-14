@@ -23,6 +23,12 @@
 			}
 		]
 	},
+	"routes": [
+		{
+			"pattern": "api.mustafabangash.com",
+			"custom_domain": true
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
